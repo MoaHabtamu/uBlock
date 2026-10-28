@@ -26,7 +26,9 @@ import '../lib/regexanalyzer/regex.js';
 import * as makeScriptlets from './make-scriptlets.js';
 import * as scripting from './vapi-scripting.js';
 
+import { canUsePopupPreflight, installPopupPreflight } from './popup-preflight.js';
 import { domainFromHostname, hostnameFromURI } from './uri-utils.js';
+import { sessionFirewall, sessionURLFiltering } from './filtering-engines.js';
 
 import { ScriptletFilteringEngine } from './scriptlet-filtering-core.js';
 import { builtinScriptlets } from './resources/scriptlets.js';
@@ -34,7 +36,7 @@ import cacheStorage from './cachestorage.js';
 import logger from './logger.js';
 import { onBroadcast } from './broadcast.js';
 import { redirectEngine } from './redirect-engine.js';
-import { sessionFirewall } from './filtering-engines.js';
+import staticNetFilteringEngine from './static-net-filtering.js';
 import µb from './background.js';
 
 /******************************************************************************/
@@ -232,6 +234,24 @@ export class ScriptletFilteringEngineEx extends ScriptletFilteringEngine {
             options.mainCode = assembleMainWorldWrapper(result.MAIN.code, options);
         }
         const trustedSiteMatcher = µb.trustedSites.getMatcher();
+        // Dynamic filtering can override a static popup decision. Leave those
+        // configurations to the authoritative background path for now.
+        if (
+            µb.hiddenSettings.preventPopupWindows &&
+            canUsePopupPreflight(sessionFirewall, sessionURLFiltering) &&
+            staticNetFilteringEngine.popupPreflight.block.length !== 0
+        ) {
+            const preflight = {
+                ...staticNetFilteringEngine.popupPreflight,
+                hostname,
+                domain,
+            };
+            const code = `try { (${installPopupPreflight.toString()})(` +
+                `${JSON.stringify(preflight)},` +
+                `${trustedSiteMatcher.match.toString()},` +
+                `${JSON.stringify(Array.from(trustedSiteMatcher.data).filter(a => a[0] !== '#'))}); } catch {}`;
+            options.mainCode = [ code, options.mainCode ?? '' ].join('\n');
+        }
         const earlyBailoutCode = [
             isTrustedContext.toString(),
             'if ( isTrustedContext(',
